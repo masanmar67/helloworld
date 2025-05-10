@@ -1,0 +1,66 @@
+pipeline {
+    agent none
+
+    stages {
+        stage('Get Code') {
+            agent {label 'nodo1'}
+            steps {
+                // Obtener el código del repositorio en github
+                bat 'hostname'
+                bat 'whoami'
+                echo 'Obteniendo el código de repositorio'
+                git 'https://github.com/masanmar67/helloworld.git'
+                bat 'dir'
+                echo WORKSPACE
+                stash includes: '**', name: 'Files'
+            }
+        }
+        stage('Build') {
+            agent {label 'nodo1'}
+            steps {
+                echo 'Esta es la etapa de compilación, si hace falta'
+            }
+        }
+        
+        stage('Tests'){
+            parallel{
+                stage('Unit') {
+                    agent {label 'nodo2'}
+                    steps {
+                        bat 'hostname'
+                        bat 'whoami'
+                        echo WORKSPACE
+                        unstash 'Files'
+                        bat '''
+                            set PYTHONPATH=%WORKSPACE%
+                            pytest --junitxml=result-unit.xml test\\unit
+                        '''
+                    }
+                }
+                stage('RestService'){
+                    agent {label 'nodo2'}
+                    steps {
+                        bat 'hostname'
+                        bat 'whoami'
+                        echo WORKSPACE
+                        unstash 'Files'
+                        bat '''
+                            set FLASK_APP=app\\api.py
+                            set FLASK_ENV=development
+                            start flask run
+                            start java -jar C:\\proyectos\\diplodevops\\wiremock\\wiremock-standalone-3.13.0.jar --port 9090 --verbose --root-dir C:\\proyectos\\diplodevops\\wiremock
+                            set PYTHONPATH=%WORKSPACE%
+                            pytest --junitxml=result-rest.xml test\\rest
+                        '''
+                    }
+                }
+            }
+        }
+        stage('Results'){
+            agent {label 'nodo2'}
+            steps {
+                junit '*.xml'
+            }
+        }
+    }
+}
