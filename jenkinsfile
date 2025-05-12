@@ -47,8 +47,12 @@ pipeline {
                         bat '''
                             set FLASK_APP=app\\api.py
                             set FLASK_ENV=development
-                            start flask run
-                            start java -jar C:\\proyectos\\diplodevops\\wiremock\\wiremock-standalone-3.13.0.jar --port 9090 --verbose --root-dir C:\\proyectos\\diplodevops\\wiremock
+                            start /B flask run > flask.log 2>&1
+                            start /B java -jar C:\\proyectos\\diplodevops\\wiremock\\wiremock-standalone-3.13.0.jar --port 9090 --verbose --root-dir C:\\proyectos\\diplodevops\\wiremock > wiremock.log 2>&1
+
+                            REM Espera a que el servicio esté disponible (Puerto 5000)
+                            powershell -Command "& { for ($i=0; $i -lt 10; $i++) { if (Test-NetConnection -ComputerName 'localhost' -Port 5000).TcpTestSucceeded { exit 0 }; Start-Sleep -Seconds 2 }; exit 1 }"
+
                             set PYTHONPATH=%WORKSPACE%
                             pytest --junitxml=result-rest.xml test\\rest
                         '''
