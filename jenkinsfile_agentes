@@ -1,0 +1,144 @@
+pipeline {
+    agent none
+
+    stages {
+        stage('Get Code') {
+            agent {label 'ubuntun1'}
+            steps {
+                // Obtener el código del repositorio en github
+                sh '''
+                    hostname
+                    whoami
+                '''
+                echo 'Obteniendo el código de repositorio'
+                git 'https://github.com/masanmar67/helloworld.git'
+                sh 'ls'
+                echo WORKSPACE
+                stash includes: '**', name: 'Files'
+            }
+        }
+        stage('Tests'){
+            parallel{
+                stage('Unit') {
+                    agent {label 'ubuntun2'}
+                    steps {
+                        unstash 'Files'
+                        echo WORKSPACE
+                        sh '''
+                            export PYTHONPATH=$WORKSPACE
+                            export PATH="/home/ubuntu/.local/bin:${PATH}"
+                            hostname
+                            whoami
+                            pytest --junitxml=result-unit.xml ./test/unit
+                        '''
+                    }
+                }
+                stage('RestService'){
+                    agent {label 'ubuntun2'}
+                    steps {
+                        unstash 'Files'
+                        script {
+                            echo WORKSPACE
+                            sh '''#!/bin/bash
+                                export FLASK_APP=./app/api.py
+                                export FLASK_ENV=development
+                                export PYTHONPATH=$WORKSPACE
+                                export PATH="/home/ubuntu/.local/bin:${PATH}"
+                                hostname
+                                whoami
+                                java -jar /home/ubuntu/wiremock/wiremock-standalone-3.13.0.jar --port 9090 --verbose --root-dir /home/ubuntu/wiremock/ > flask.log 2>&1 &
+                                flask run > flask.log 2>&1 &
+            
+                                for i in {1..10}; do
+                                    curl -s http://localhost:5000/ && break
+                                    echo "Esperando a que Flask levante..."
+                                    sleep 2
+                                done
+            
+                                for i in {1..10}; do
+                                    curl -s http://localhost:9090/__admin/ && break
+                                    echo "Esperando a que WireMock levante..."
+                                    sleep 2
+                                done
+            
+            
+                                pytest --junitxml=result-rest.xml ./test/rest
+                            '''
+                        }
+                    }
+                }
+                stage('Cobertura'){
+                    agent {label 'ubuntun2'}
+                    steps {
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE'){
+                            echo WORKSPACE
+                            sh '''
+                                export PATH="/home/ubuntu/.local/bin:${PATH}"
+                                export PYTHONPATH=$WORKSPACE
+                                hostname
+                                whoami
+                                coverage run --branch --source=app --omit=./app/_init_.py,./app/api.py -m pytest ./test/unit
+                                coverage xml
+                            '''
+                            cobertura coberturaReportFile : 'coverage.xml', conditionalCoverageTargets: '100,95,85', lineCoverageTargets: '100,90,80'
+                        }
+                    }
+                }
+                stage('Static'){
+                    agent {label 'ubuntun2'}
+                    steps {
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE'){
+                            echo WORKSPACE
+                            sh '''
+                                export PATH="/home/ubuntu/.local/bin:${PATH}"
+                                hostname
+                                whoami
+                                flake8 --format=pylint --exit-zero app > flake8.out
+                            '''
+                            recordIssues tools: [flake8(name: 'Flake8', pattern: 'flake8.out')], qualityGates : [[threshold:8, type: 'TOTAL', unstable: true], [threshold: 10, type: 'TOTAL', unstable: false]]
+                        }
+                    }
+                }
+                stage('Security'){
+                    agent {label 'ubuntun2'}
+                    steps {
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE'){
+                            echo WORKSPACE
+                            sh '''
+                                export PATH="/home/ubuntu/.local/bin:${PATH}"
+                                hostname
+                                whoami
+                                bandit --exit-zero -r . --format=custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}"
+                            '''
+                            recordIssues tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')], qualityGates : [[threshold:2, type: 'TOTAL', unstable: true], [threshold: 4, type: 'TOTAL', unstable: false]]
+                        }
+                    }
+                }
+            }
+        }
+        stage('Performance'){
+            agent {label 'ubuntun2'}
+            steps {
+                echo WORKSPACE
+                sh '''
+                    export FLASK_APP=./app/api.py
+                    export FLASK_ENV=development
+                    export PYTHONPATH=$WORKSPACE
+                    export PATH="/home/ubuntu/.local/bin:${PATH}"
+                    hostname
+                    whoami
+                    flask run > flask.log 2>&1 &
+
+                    for i in {1..10}; do
+                        curl -s http://localhost:5000/ && break
+                        echo "Esperando a que Flask levante..."
+                        sleep 2
+                    done
+
+                    /home/ubuntu/jmeter/jmeter/bin/jmeter -n -t ./test/jmeter/flask.jmx -f -l flask.jtl
+                '''
+                perfReport sourceDataFiles : 'flask.jtl'
+            }
+        }
+    }
+}
